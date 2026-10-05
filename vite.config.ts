@@ -3,6 +3,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 import { defineConfig } from 'vite'
 
 export default defineConfig({
+  base: '/noro/',
   plugins: [
     react(),
     VitePWA({
@@ -13,8 +14,8 @@ export default defineConfig({
         short_name: 'NEURO',
         description: 'Nörolojik rehabilitasyon için hasta ve seans planı',
         lang: 'tr',
-        start_url: '/',
-        scope: '/',
+        start_url: '/noro/',
+        scope: '/noro/',
         display: 'standalone',
         orientation: 'portrait',
         background_color: '#F7F8FA',
@@ -27,7 +28,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,json,webmanifest}'],
-        navigateFallback: 'index.html',
+        navigateFallback: '/noro/index.html',
       },
     }),
   ],
