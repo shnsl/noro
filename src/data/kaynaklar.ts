@@ -55,3 +55,86 @@ export const DMD_KAYNAK: Kaynak = {
   url: 'https://www.cdc.gov/muscular-dystrophy/treatments/care-considerations.html',
   lisans: 'Kısa özgün taslak; Lancet metni kopyalanmamıştır',
 }
+
+/** Verschuren ve ark., CP için egzersiz ve fiziksel aktivite önerileri (Dev Med Child Neurol, 2016). */
+export const CP_PA: Kaynak = {
+  ad: 'Verschuren ve diğerleri, CP’de egzersiz ve fiziksel aktivite önerileri',
+  yil: '2016',
+  url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC4942358/',
+  lisans: 'Açık erişim özet; dozlar özgün kısa taslaktır',
+}
+
+/** European Physiotherapy Guideline for Parkinson’s Disease (ParkinsonNet / Keus ve ark.). */
+export const PD_EU: Kaynak = {
+  ad: 'Avrupa Parkinson Fizyoterapi Kılavuzu (ParkinsonNet)',
+  yil: '2014',
+  url: 'https://www.parkinsonnet.nl/app/uploads/sites/3/2019/11/eu_guideline_parkinson_guideline_for_pt_s1.pdf',
+  lisans: 'Kılavuz özeti; alıştırmalar özgün kısa taslaktır',
+}
+
+/** APTA Parkinson klinik uygulama kılavuzu (aerobik, görev-spesifik, cueing). */
+export const PD_APTA: Kaynak = {
+  ad: 'APTA Parkinson hastalığı fizyoterapi klinik kılavuzu',
+  yil: '2022',
+  url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC9046970/',
+  lisans: 'Açık erişim; öneriler özgün kısa taslaktır',
+}
+
+export const CORE_STROKE: Kaynak = {
+  ad: 'Core egzersizleri, inme (J Cardiovasc Dev Dis)',
+  yil: '2023',
+  url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC9959809/',
+  lisans: 'Açık erişim; adımlar özgün kısa taslak',
+}
+
+export const CORE_GAIT: Kaynak = {
+  ad: 'Core stabilizasyon, inmede denge/yürüyüş',
+  yil: '2014',
+  url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC4242954/',
+  lisans: 'Açık erişim; adımlar özgün kısa taslak',
+}
+
+export const CORE_UCDAVIS: Kaynak = {
+  ad: 'UC Davis, temel core',
+  yil: '2020',
+  url: 'https://health.ucdavis.edu/media-resources/sports-medicine/documents/pdfs/fundamental-core.pdf',
+  lisans: 'Hasta eğitimi; adımlar özgün kısa taslak',
+}
+
+export const CORE_PD: Kaynak = {
+  ad: 'Davis Phinney, Parkinson core',
+  yil: '2021',
+  url: 'https://davisphinneyfoundation.org/core-strengthening-exercises-for-parkinsons-disease-part-4-of-4/',
+  lisans: 'Eğitim içeriği; adımlar özgün kısa taslak',
+}
+
+export const CORE_CP: Kaynak = {
+  ad: 'Flint Rehab, CP core',
+  yil: '2023',
+  url: 'https://www.flintrehab.com/core-exercises-for-cerebral-palsy/',
+  lisans: 'Eğitim özeti; adımlar özgün kısa taslak',
+}
+
+/** Canadian Stroke Best Practice Recommendations — rehabilitasyon. */
+export const CSBPR: Kaynak = {
+  ad: 'Canadian Stroke Best Practice Recommendations, rehabilitasyon',
+  yil: '2025',
+  url: 'https://www.strokebestpractices.ca/',
+  lisans: 'Kılavuz özeti; alıştırmalar özgün kısa taslaktır',
+}
+
+/** WHO, inme sonrası bağımsızlık — eklem / gövde / transfer taslakları. */
+export const WHO_STROKE: Kaynak = {
+  ad: 'WHO, inme sonrası bağımsızlık (PROMOTING INDEPENDENCE FOLLOWING A STROKE)',
+  yil: '1989',
+  url: 'https://iris.who.int/handle/10665/38820',
+  lisans: 'Eğitim özeti; adımlar özgün kısa taslaktır',
+}
+
+/** American Stroke Association, inme sonrası egzersiz videoları (genel rehber). */
+export const ASA_EX: Kaynak = {
+  ad: 'American Stroke Association, inme sonrası egzersiz',
+  yil: '2019',
+  url: 'https://www.stroke.org/en/life-after-stroke/stroke-rehab/post-stroke-exercise-videos',
+  lisans: 'Hasta eğitimi; adımlar özgün kısa taslaktır',
+}

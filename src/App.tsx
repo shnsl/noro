@@ -1,14 +1,27 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MuayeneFormu } from './MuayeneFormu'
-import type { Cevaplar } from './data/ais'
-import { kovaBul, kombinasyonBul, seansSirasi } from './data/katalog'
+import type { Cevaplar } from './data/hesap'
 import { SEANS_SURESI } from './data/tipler'
 import { hesapla } from './data/hesap'
-import { kombinasyonIdBul, skalaBul, secenekBul, uygunKombinasyonlar } from './data/skalalar'
+import { skalaBul, secenekBul } from './data/skalalar'
+import { atananCoreListesi, coreKatalog, ekOnerileriSec } from './data/ekOneriler'
+import {
+  BOLGE_FILTRELER,
+  IHTIYAC_SECENEKLERI,
+  bolgeEtiket,
+  egzersizAdKaydet,
+  katalogBul,
+  katalogFiltrele,
+  manuelEgzersizEkle,
+  tumEgzersizKatalogu,
+  type EgzTur,
+  type KatalogEgzersiz,
+} from './data/egzersizYonetim'
+import type { Ihtiyac } from './data/tipler'
+import { bulgulariCikar, seansEgzersizleri, seansUret } from './data/tedaviMotoru'
 import { HASTALIKLAR } from './data/tipler'
-import type { Egzersiz, Hasta, HastalikId, Kombinasyon, YasGrubu } from './data/tipler'
-import { hastaGetir, hastaKaydet, hastaSil, hastalariGetir, hastalariSenkronizeEt, yeniId } from './kayit'
-import { webdenKombinasyon } from './webKatalog'
+import type { Hasta, HastalikId, YasGrubu } from './data/tipler'
+import { hastaGetir, hastaKaydet, hastaSil, hastalariGetir, hastalariYukle, yeniId } from './kayit'
 import { TEMA_RENKLERI, temaGetir, temaKaydet } from './tema'
 import type { Mod } from './tema'
 import { Giris, oturumVarMi, oturumKapat } from './Giris'
@@ -81,7 +94,7 @@ function Liste({
   yeni: () => void
   ayarlar: () => void
 }) {
-  const hastalar = useSyncHastalar()
+  const { hastalar, yukleniyor, hata } = useFirebaseHastalar()
   return (
     <div className="ana-sayfa">
       <header className="ana-ust">
@@ -99,9 +112,7 @@ function Liste({
       <section className="ana-hero">
         <p className="ana-hero-ust">Nörolojik rehabilitasyon</p>
         <h1 className="ana-hero-baslik">NEURO</h1>
-        <p className="ana-hero-metin">
-          Değerlendir, 30 dakikalık seti seç, seansı yönet. Kayıtlar bu cihazda ve bulutta tutulur.
-        </p>
+        <p className="ana-hero-metin">Değerlendir → seans planı.</p>
       </section>
 
       <section className="ana-liste">
@@ -117,15 +128,17 @@ function Liste({
           </div>
         </div>
 
-        {hastalar.length === 0 ? (
+        {yukleniyor ? (
+          <p className="not">Yükleniyor…</p>
+        ) : hata ? (
+          <p className="hata">{hata}</p>
+        ) : hastalar.length === 0 ? (
           <div className="ana-bos">
             <button className="ana-bos-ikon" type="button" onClick={yeni} aria-label="Hasta ekle">
               +
             </button>
             <p className="ana-bos-baslik">Henüz hasta yok</p>
-            <p className="ana-bos-metin">
-              + ile hasta ekleyin. Kayıtlar bu cihazda ve Firebase’de saklanır.
-            </p>
+            <p className="ana-bos-metin">+ ile yeni hasta ekleyin.</p>
           </div>
         ) : (
           <ul className="ana-hasta-listesi">
@@ -178,11 +191,6 @@ function Form({ geri, kaydedildi }: { geri: () => void; kaydedildi: (id: string)
       return
     }
     const yasGrubu = hastalik?.yasVar ? yas : undefined
-    const kombinasyonId = kombinasyonIdBul(hastalikId, yasGrubu, hesap.sonucId)
-    if (!kombinasyonId) {
-      setHata('Bu sonuca tedavi seti bağlanamadı.')
-      return
-    }
     const hasta: Hasta = {
       id: yeniId(),
       ad: adTemiz,
@@ -190,11 +198,15 @@ function Form({ geri, kaydedildi }: { geri: () => void; kaydedildi: (id: string)
       yas: yasGrubu,
       skalaId: skala.id,
       sonucId: hesap.sonucId,
-      kombinasyonId,
+      kombinasyonId: 'motor',
       cevaplar,
     }
-    await hastaKaydet(hasta)
-    kaydedildi(hasta.id)
+    try {
+      await hastaKaydet(hasta)
+      kaydedildi(hasta.id)
+    } catch {
+      setHata('Firebase’e yazılamadı. Bağlantıyı kontrol edin.')
+    }
   }
 
   return (
@@ -248,123 +260,187 @@ function HastaSayfa({
   olc: () => void
   silindi: () => void
 }) {
-  const hasta = hastaGetir(id)
-  const [seciliId, setSeciliId] = useState(hasta?.kombinasyonId ?? '')
-  const [ekKombinasyon, setEkKombinasyon] = useState<Kombinasyon[]>([])
-  const [ekEgzersiz, setEkEgzersiz] = useState<Egzersiz[]>([])
-  const [webMesaj, setWebMesaj] = useState('')
-  const [webYukleniyor, setWebYukleniyor] = useState(false)
+  const [hasta, setHasta] = useState(() => hastaGetir(id))
+  const [yukleniyor, setYukleniyor] = useState(!hastaGetir(id))
   const [acikId, setAcikId] = useState<string | undefined>()
+  const [ekAcikId, setEkAcikId] = useState<string | undefined>()
   const [silOnay, setSilOnay] = useState(false)
-  if (!hasta) return <p className="not">Hasta kaydı bulunamadı.</p>
-  const kayit = hasta
 
-  const kova = kovaBul(kayit.hastalikId, kayit.yas)
-  const uygun = uygunKombinasyonlar(kayit.hastalikId, kayit.yas, kayit.sonucId)
-  const yerlesik = kova?.kombinasyonlar.filter((kart) => uygun.includes(kart.id)) ?? []
-  const liste = [...yerlesik, ...ekKombinasyon.filter((kart) => !yerlesik.some((eski) => eski.id === kart.id))]
-  const kombinasyon =
-    liste.find((kart) => kart.id === seciliId) ??
-    liste[0] ??
-    kombinasyonBul(kayit.hastalikId, kayit.yas, seciliId)?.kombinasyon
-
-  function kombinasyonDegistir(kombinasyonId: string) {
-    void hastaKaydet({ ...kayit, kombinasyonId })
-    setSeciliId(kombinasyonId)
-    setAcikId(undefined)
-  }
-  const egzersizler = kova && kombinasyon ? seansSirasi(kova, kombinasyon.plan, ekEgzersiz) : []
-
-  async function webdenGetir() {
-    setWebYukleniyor(true)
-    setWebMesaj('')
-    try {
-      const paket = await webdenKombinasyon(kayit.hastalikId, kayit.yas, kayit.sonucId)
-      const yeni = paket.kombinasyonlar.filter((kart) => !liste.some((eski) => eski.id === kart.id))
-      setEkEgzersiz(paket.egzersizler)
-      setEkKombinasyon((onceki) => [...onceki, ...yeni])
-      setWebMesaj(yeni.length > 0 ? `${yeni.length} yeni kombinasyon eklendi.` : 'Bu evre için webde başka set kalmadı.')
-    } catch {
-      setWebMesaj('Webden alınamadı. Bağlantıyı kontrol edin.')
-    } finally {
-      setWebYukleniyor(false)
+  useEffect(() => {
+    const mevcut = hastaGetir(id)
+    if (mevcut) {
+      setHasta(mevcut)
+      setYukleniyor(false)
+      return
     }
-  }
+    let iptal = false
+    setYukleniyor(true)
+    void hastalariYukle()
+      .then(() => {
+        if (!iptal) setHasta(hastaGetir(id))
+      })
+      .finally(() => {
+        if (!iptal) setYukleniyor(false)
+      })
+    return () => {
+      iptal = true
+    }
+  }, [id])
+
+  if (yukleniyor) return <p className="not">Yükleniyor…</p>
+  if (!hasta) return <p className="not">Hasta kaydı bulunamadı.</p>
+
+  const seans = seansUret(hasta.hastalikId, hasta.yas, hasta.cevaplar)
+  const egzersizler = seansEgzersizleri(hasta.hastalikId, hasta.yas, seans.plan)
   const sonuc = secenekBul(hasta.skalaId, hasta.sonucId)
   const skala = skalaBul(hasta.hastalikId)
-  const hesap = hesapla(hasta.hastalikId, hasta.cevaplar)
+  const bulgular = bulgulariCikar(hasta.hastalikId, hasta.cevaplar).slice(0, 2)
+  const atananlar = atananCoreListesi(hasta.atananCoreIds)
+  const atananIdSet = new Set(atananlar.map((x) => x.id))
+  const ekOneriler = ekOnerileriSec(
+    hasta.hastalikId,
+    hasta.yas,
+    hasta.cevaplar,
+    [...seans.plan.map((p) => p.egzersizId), ...atananIdSet],
+    4,
+  ).filter((x) => !atananIdSet.has(x.id))
 
   return (
     <>
       <Ust baslik="Hasta" geri={geri} />
       <h1 className="sayfa-baslik">{hasta.ad}</h1>
       <p className="yardim">{hastaOzeti(hasta)}</p>
-      <span className="etiket">Bu evrenin kombinasyonları</span>
-      <button className="ikincil" type="button" onClick={() => void webdenGetir()} disabled={webYukleniyor}>
-        {webYukleniyor ? 'Getiriliyor…' : 'Webden kombinasyon getir'}
-      </button>
-      {webMesaj ? <p className="not">{webMesaj}</p> : null}
-      {liste.map((kart) => (
-        <button
-          key={kart.id}
-          type="button"
-          className={kart.id === kombinasyon?.id ? 'secim secili' : 'secim'}
-          onClick={() => kombinasyonDegistir(kart.id)}
-        >
-          <strong>{kart.ad}</strong>
-          <span>{kart.hedef}</span>
-        </button>
-      ))}
-      <section className="kart">
-        <p className="ust-not">
-          {skala?.ad ?? 'Skala'} · {sonuc?.etiket ?? 'sonuç yok'}
-        </p>
-        {hesap?.gerekce ? <p className="not">{hesap.gerekce}</p> : null}
-        <h2>{kombinasyon?.ad ?? 'Tedavi'}</h2>
-        {kombinasyon ? <p className="not">{kombinasyon.hedef}</p> : null}
-        {egzersizler.map(({ kalem, egzersiz }, index) => {
-          const acik = acikId === egzersiz.id
-          return (
-            <div key={egzersiz.id}>
-              <button
-                type="button"
-                className="egzersiz"
-                onClick={() => setAcikId(acik ? undefined : egzersiz.id)}
-              >
-                <span className="sira">{index + 1}</span>
-                <span>
-                  <strong>
-                    {kalem.dakika} dk · {egzersiz.ad}
-                  </strong>
-                  <span>{kalem.tekrar}</span>
-                </span>
-              </button>
-              {acik ? (
-                <div className="adim">
-                  <p>{egzersiz.pozisyon}</p>
-                  {egzersiz.adimlar.map((adim) => (
-                    <p key={adim}>· {adim}</p>
-                  ))}
-                  <p>{egzersiz.onlem}</p>
-                  <p>Kaynak taslağı: {egzersiz.doz}</p>
-                  <p className="kaynak">
-                    {egzersiz.kaynak.ad} · {egzersiz.kaynak.yil} · {egzersiz.kaynak.lisans}
-                    <br />
+
+      <section className="seans-kutu">
+        <div className="seans-ust">
+          <div>
+            <p className="ust-not">
+              {skala?.ad ?? 'Skala'} · {sonuc?.etiket ?? '—'}
+              {bulgular[0] ? ` · ${bulgular[0].bolge}` : ''}
+            </p>
+            <h2 className="seans-baslik">Seans</h2>
+          </div>
+          <span className="seans-sure">{SEANS_SURESI} dk</span>
+        </div>
+
+        <div className="seans-plan">
+          {egzersizler.map(({ kalem, egzersiz }, index) => {
+            const anahtar = `${egzersiz.id}-${index}`
+            const acik = acikId === anahtar
+            return (
+              <div key={anahtar} className={acik ? 'seans-madde acik' : 'seans-madde'}>
+                <button
+                  type="button"
+                  className="seans-madde-btn"
+                  onClick={() => setAcikId(acik ? undefined : anahtar)}
+                >
+                  <span className="sira">{index + 1}</span>
+                  <span className="seans-madde-metin">
+                    <strong>{egzersiz.ad}</strong>
+                    <span className="seans-madde-meta">
+                      <em>{kalem.dakika} dk</em>
+                      <em>{egzersiz.doz}</em>
+                    </span>
+                  </span>
+                  <span className="ana-hasta-ok" aria-hidden>
+                    {acik ? '▾' : '›'}
+                  </span>
+                </button>
+                {acik ? (
+                  <div className="adim seans-adim">
+                    {egzersiz.adimlar.map((adim) => (
+                      <p key={adim}>· {adim}</p>
+                    ))}
+                    <p className="mini">{egzersiz.onlem}</p>
                     <a href={egzersiz.kaynak.url} target="_blank" rel="noreferrer">
                       Kaynak
                     </a>
-                  </p>
-                </div>
-              ) : null}
-            </div>
-          )
-        })}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
       </section>
-      {kombinasyon ? (
-        <p className="not">
-          Toplam {SEANS_SURESI} dk. {kombinasyon.seansNotu}
-        </p>
+
+      {atananlar.length > 0 ? (
+        <section className="ek-kutu atanan">
+          <div className="ek-ust">
+            <h2 className="ek-baslik">Atanan core</h2>
+            <span className="ek-alt">{atananlar.length}</span>
+          </div>
+          <div className="ek-liste">
+            {atananlar.map((oneri) => {
+              const acik = ekAcikId === oneri.id
+              return (
+                <div key={oneri.id} className={acik ? 'ek-madde acik' : 'ek-madde'}>
+                  <button
+                    type="button"
+                    className="ek-madde-btn"
+                    onClick={() => setEkAcikId(acik ? undefined : oneri.id)}
+                  >
+                    <span className="ek-madde-metin">
+                      <strong>{oneri.ad}</strong>
+                      <em>{oneri.kategori}</em>
+                    </span>
+                    <span aria-hidden>{acik ? '▾' : '›'}</span>
+                  </button>
+                  {acik ? (
+                    <div className="adim ek-adim">
+                      <p className="mini">
+                        {oneri.pozisyon} · {oneri.doz}
+                      </p>
+                      {oneri.adimlar.map((adim) => (
+                        <p key={adim}>· {adim}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        </section>
       ) : null}
+
+      {ekOneriler.length > 0 ? (
+        <section className="ek-kutu">
+          <div className="ek-ust">
+            <h2 className="ek-baslik">Ek öneriler</h2>
+            <span className="ek-alt">otomatik</span>
+          </div>
+          <div className="ek-liste">
+            {ekOneriler.map((oneri) => {
+              const acik = ekAcikId === `oto-${oneri.id}`
+              return (
+                <div key={oneri.id} className={acik ? 'ek-madde acik' : 'ek-madde'}>
+                  <button
+                    type="button"
+                    className="ek-madde-btn"
+                    onClick={() => setEkAcikId(acik ? undefined : `oto-${oneri.id}`)}
+                  >
+                    <span className="ek-madde-metin">
+                      <strong>{oneri.ad}</strong>
+                      <em>{oneri.neden}</em>
+                    </span>
+                    <span aria-hidden>{acik ? '▾' : '›'}</span>
+                  </button>
+                  {acik ? (
+                    <div className="adim ek-adim">
+                      <p className="mini">
+                        {oneri.pozisyon} · {oneri.doz}
+                      </p>
+                      {oneri.adimlar.map((adim) => (
+                        <p key={adim}>· {adim}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      ) : null}
+
       <button className="ikincil" type="button" onClick={olc}>
         Değerlendirmeyi güncelle
       </button>
@@ -375,7 +451,9 @@ function HastaSayfa({
             className="tehlike"
             type="button"
             onClick={() => {
-              void hastaSil(hasta.id).then(() => silindi())
+              void hastaSil(hasta.id)
+                .then(() => silindi())
+                .catch(() => undefined)
             }}
           >
             Evet, sil
@@ -408,16 +486,23 @@ function Olcum({ id, geri }: { id: string; geri: () => void }) {
       setHata('Değerlendirmede eksik madde var.')
       return
     }
-    const uygun = uygunKombinasyonlar(kayit.hastalikId, kayit.yas, hesap.sonucId)
-    const kombinasyonId = uygun.includes(kayit.kombinasyonId) ? kayit.kombinasyonId : uygun[0]
-    if (!kombinasyonId) return
-    await hastaKaydet({ ...kayit, skalaId: skala.id, sonucId: hesap.sonucId, kombinasyonId, cevaplar })
-    geri()
+    try {
+      await hastaKaydet({
+        ...kayit,
+        skalaId: skala.id,
+        sonucId: hesap.sonucId,
+        kombinasyonId: 'motor',
+        cevaplar,
+      })
+      geri()
+    } catch {
+      setHata('Firebase’e yazılamadı.')
+    }
   }
 
   return (
     <>
-      <Ust baslik={skala.ad} geri={geri} />
+      <Ust baslik="Değerlendirme" geri={geri} />
       <MuayeneFormu hastalikId={kayit.hastalikId} cevaplar={cevaplar} degistir={setCevaplar} />
       {hata ? <p className="hata">{hata}</p> : null}
       <button className="ana" type="button" onClick={() => void kaydet()}>
@@ -435,11 +520,150 @@ function Ayarlar({ geri, cikisYap }: { geri: () => void; cikisYap: () => void })
   const [sifreMesaj, setSifreMesaj] = useState('')
   const [sifreHata, setSifreHata] = useState('')
   const [kaydediliyor, setKaydediliyor] = useState(false)
+  const [hastalar, setHastalar] = useState(hastalariGetir)
+  const [hastaId, setHastaId] = useState('')
+  const [seciliCore, setSeciliCore] = useState<string[]>([])
+  const [coreMesaj, setCoreMesaj] = useState('')
+  const [detayId, setDetayId] = useState<string | undefined>()
+  const [adDuzenle, setAdDuzenle] = useState(false)
+  const [adTaslak, setAdTaslak] = useState('')
+  const [katalogSurum, setKatalogSurum] = useState(0)
+  const [bolgeFiltre, setBolgeFiltre] = useState('hepsi')
+  const [yeniAcik, setYeniAcik] = useState(false)
+  const [yeniTur, setYeniTur] = useState<EgzTur>('tedavi')
+  const [yeniAd, setYeniAd] = useState('')
+  const [yeniBolge, setYeniBolge] = useState('govde')
+  const [yeniHedef, setYeniHedef] = useState('')
+  const [yeniPozisyon, setYeniPozisyon] = useState('')
+  const [yeniDoz, setYeniDoz] = useState('8–10')
+  const [yeniAdimlar, setYeniAdimlar] = useState('')
+  const [yeniOnlem, setYeniOnlem] = useState('Ağrıda dur.')
+  const [yeniIhtiyac, setYeniIhtiyac] = useState<Ihtiyac>('kuvvet')
+  const [acikPanel, setAcikPanel] = useState<Record<string, boolean>>({
+    gorunum: false,
+    tema: false,
+    sifre: false,
+    oturum: false,
+  })
+  const liste = katalogFiltrele(bolgeFiltre)
+  const toplamEgzersiz = tumEgzersizKatalogu().length
+  void katalogSurum
+  const basiliRef = useRef<{ id: string; zaman: number } | null>(null)
+  const uzunBasildiRef = useRef(false)
+
+  function panelAcKapa(id: string) {
+    setAcikPanel((onceki) => ({ ...onceki, [id]: !onceki[id] }))
+  }
+
+  useEffect(() => {
+    void hastalariYukle().then(setHastalar).catch(() => setHastalar([]))
+  }, [])
+
+  useEffect(() => {
+    const kayit = hastalariGetir().find((h) => h.id === hastaId)
+    setSeciliCore(kayit?.atananCoreIds ?? [])
+    setCoreMesaj('')
+  }, [hastaId])
 
   function guncelle(mod: Mod, renk: string) {
     const sonraki = { mod, renk }
     setTema(sonraki)
     temaKaydet(sonraki)
+  }
+
+  function coreToggle(id: string) {
+    setSeciliCore((onceki) => (onceki.includes(id) ? onceki.filter((x) => x !== id) : [...onceki, id]))
+  }
+
+  function basildi(id: string) {
+    uzunBasildiRef.current = false
+    basiliRef.current = { id, zaman: window.setTimeout(() => {
+      uzunBasildiRef.current = true
+      detayAc(id)
+      basiliRef.current = null
+    }, 450) }
+  }
+
+  function birakildi(id: string, tur: EgzTur) {
+    const kayit = basiliRef.current
+    if (kayit) {
+      window.clearTimeout(kayit.zaman)
+      basiliRef.current = null
+    }
+    if (uzunBasildiRef.current) return
+    if (tur === 'core' && hastaId) {
+      coreToggle(id)
+    } else {
+      detayAc(id)
+    }
+  }
+
+  function iptalBasili() {
+    const kayit = basiliRef.current
+    if (kayit) {
+      window.clearTimeout(kayit.zaman)
+      basiliRef.current = null
+    }
+  }
+
+  function detayAc(id: string) {
+    setDetayId(id)
+    setAdDuzenle(false)
+    setAdTaslak('')
+  }
+
+  function adDuzenlemeyiAc(mevcut: string) {
+    setAdTaslak(mevcut)
+    setAdDuzenle(true)
+  }
+
+  function adKaydet() {
+    if (!detayId) return
+    const temiz = adTaslak.trim()
+    if (temiz) {
+      egzersizAdKaydet(detayId, temiz)
+      setKatalogSurum((n) => n + 1)
+    }
+    setAdDuzenle(false)
+  }
+
+  function yeniKaydet() {
+    if (!yeniAd.trim()) return
+    const eklenen = manuelEgzersizEkle({
+      ad: yeniAd,
+      tur: yeniTur,
+      bolge: yeniTur === 'core' ? 'core' : yeniBolge,
+      hedef: yeniHedef || yeniAd,
+      pozisyon: yeniPozisyon,
+      doz: yeniDoz,
+      adimlar: yeniAdimlar.split('\n').map((s) => s.trim()).filter(Boolean),
+      onlem: yeniOnlem,
+      ihtiyac: yeniIhtiyac,
+      kategori: yeniTur === 'core' ? 'core' : undefined,
+    })
+    setKatalogSurum((n) => n + 1)
+    setYeniAcik(false)
+    setYeniAd('')
+    setYeniHedef('')
+    setYeniPozisyon('')
+    setYeniAdimlar('')
+    setBolgeFiltre(yeniTur === 'core' ? 'core' : yeniBolge)
+    detayAc(eklenen.id)
+  }
+
+  async function coreAta() {
+    const kayit = hastalariGetir().find((h) => h.id === hastaId)
+    if (!kayit) {
+      setCoreMesaj('Hasta seçin.')
+      return
+    }
+    try {
+      await hastaKaydet({ ...kayit, atananCoreIds: seciliCore })
+      setHastalar(hastalariGetir())
+      setCoreMesaj(`${kayit.ad}: ${seciliCore.length} core atandı.`)
+    } catch {
+      setCoreMesaj('Firebase’e yazılamadı.')
+    }
   }
 
   async function sifreyiDegistir() {
@@ -496,148 +720,525 @@ function Ayarlar({ geri, cikisYap }: { geri: () => void; cikisYap: () => void })
       </header>
 
       <section className="ayar-bolum">
-        <div className="ayar-bolum-bas">
-          <h2>Görünüm</h2>
-          <p>Açık veya koyu arayüz</p>
-        </div>
-        <div className="ayar-modlar">
-          <button
-            type="button"
-            className={tema.mod === 'acik' ? 'ayar-mod secili' : 'ayar-mod'}
-            onClick={() => guncelle('acik', tema.renk)}
-          >
-            <span className="ayar-mod-ikon" aria-hidden>
-              ○
-            </span>
-            <strong>Açık</strong>
-            <span>Gündüz</span>
-          </button>
-          <button
-            type="button"
-            className={tema.mod === 'koyu' ? 'ayar-mod secili' : 'ayar-mod'}
-            onClick={() => guncelle('koyu', tema.renk)}
-          >
-            <span className="ayar-mod-ikon" aria-hidden>
-              ●
-            </span>
-            <strong>Koyu</strong>
-            <span>Gece</span>
-          </button>
-        </div>
-      </section>
-
-      <section className="ayar-bolum">
-        <div className="ayar-bolum-bas">
-          <h2>Tema rengi</h2>
-          <p>Seçili: {seciliRenkAdi}</p>
-        </div>
-        <div className="ayar-renkler">
-          {TEMA_RENKLERI.map((kart) => (
+        <button
+          type="button"
+          className="ayar-bolum-bas ayar-bolum-toggle"
+          aria-expanded={acikPanel.gorunum}
+          onClick={() => panelAcKapa('gorunum')}
+        >
+          <span>
+            <h2>Görünüm</h2>
+            <p>Açık veya koyu arayüz</p>
+          </span>
+          <span className="ayar-chevron" aria-hidden>
+            {acikPanel.gorunum ? '▾' : '›'}
+          </span>
+        </button>
+        {acikPanel.gorunum ? (
+          <div className="ayar-modlar">
             <button
-              key={kart.id}
               type="button"
-              className={tema.renk.toLowerCase() === kart.hex.toLowerCase() ? 'ayar-renk secili' : 'ayar-renk'}
-              style={{ background: kart.hex }}
-              aria-label={kart.ad}
-              onClick={() => guncelle(tema.mod, kart.hex)}
-            />
-          ))}
-          <label className="ayar-renk-ozel" htmlFor="ozel-renk" title="Özel renk">
-            <input
-              id="ozel-renk"
-              type="color"
-              value={tema.renk}
-              onChange={(olay) => guncelle(tema.mod, olay.target.value)}
-            />
-            <span>+</span>
-          </label>
-        </div>
+              className={tema.mod === 'acik' ? 'ayar-mod secili' : 'ayar-mod'}
+              onClick={() => guncelle('acik', tema.renk)}
+            >
+              <span className="ayar-mod-ikon" aria-hidden>
+                ○
+              </span>
+              <strong>Açık</strong>
+              <span>Gündüz</span>
+            </button>
+            <button
+              type="button"
+              className={tema.mod === 'koyu' ? 'ayar-mod secili' : 'ayar-mod'}
+              onClick={() => guncelle('koyu', tema.renk)}
+            >
+              <span className="ayar-mod-ikon" aria-hidden>
+                ●
+              </span>
+              <strong>Koyu</strong>
+              <span>Gece</span>
+            </button>
+          </div>
+        ) : null}
       </section>
 
       <section className="ayar-bolum">
-        <div className="ayar-bolum-bas">
-          <h2>Güvenlik</h2>
-          <p>Giriş şifresini güncelle</p>
-        </div>
-        <div className="ayar-form">
-          <label className="etiket" htmlFor="eski-sifre">
-            Mevcut şifre
-          </label>
-          <input
-            id="eski-sifre"
-            type="password"
-            className="girdi"
-            value={eskiSifre}
-            onChange={(e) => setEskiSifre(e.target.value)}
-            placeholder="••••"
-            inputMode="numeric"
-          />
+        <button
+          type="button"
+          className="ayar-bolum-bas ayar-bolum-toggle"
+          aria-expanded={acikPanel.tema}
+          onClick={() => panelAcKapa('tema')}
+        >
+          <span>
+            <h2>Tema rengi</h2>
+            <p>Seçili: {seciliRenkAdi}</p>
+          </span>
+          <span className="ayar-chevron" aria-hidden>
+            {acikPanel.tema ? '▾' : '›'}
+          </span>
+        </button>
+        {acikPanel.tema ? (
+          <div className="ayar-renkler">
+            {TEMA_RENKLERI.map((kart) => (
+              <button
+                key={kart.id}
+                type="button"
+                className={tema.renk.toLowerCase() === kart.hex.toLowerCase() ? 'ayar-renk secili' : 'ayar-renk'}
+                style={{ background: kart.hex }}
+                aria-label={kart.ad}
+                onClick={() => guncelle(tema.mod, kart.hex)}
+              />
+            ))}
+            <label className="ayar-renk-ozel" htmlFor="ozel-renk" title="Özel renk">
+              <input
+                id="ozel-renk"
+                type="color"
+                value={tema.renk}
+                onChange={(olay) => guncelle(tema.mod, olay.target.value)}
+              />
+              <span>+</span>
+            </label>
+          </div>
+        ) : null}
+      </section>
 
-          <label className="etiket" htmlFor="yeni-sifre">
-            Yeni şifre
-          </label>
-          <input
-            id="yeni-sifre"
-            type="password"
-            className="girdi"
-            value={yeniSifre}
-            onChange={(e) => setYeniSifre(e.target.value)}
-            placeholder="En az 4 karakter"
-            inputMode="numeric"
-          />
+      <section className="ayar-bolum">
+        <button
+          type="button"
+          className="ayar-bolum-bas ayar-bolum-toggle"
+          aria-expanded={acikPanel.sifre}
+          onClick={() => panelAcKapa('sifre')}
+        >
+          <span>
+            <h2>Güvenlik</h2>
+            <p>Giriş şifresini güncelle</p>
+          </span>
+          <span className="ayar-chevron" aria-hidden>
+            {acikPanel.sifre ? '▾' : '›'}
+          </span>
+        </button>
+        {acikPanel.sifre ? (
+          <div className="ayar-form">
+            <label className="etiket" htmlFor="eski-sifre">
+              Mevcut şifre
+            </label>
+            <input
+              id="eski-sifre"
+              type="password"
+              className="girdi"
+              value={eskiSifre}
+              onChange={(e) => setEskiSifre(e.target.value)}
+              placeholder="••••"
+              inputMode="numeric"
+            />
 
-          <label className="etiket" htmlFor="yeni-sifre-tekrar">
-            Yeni şifre tekrar
-          </label>
-          <input
-            id="yeni-sifre-tekrar"
-            type="password"
-            className="girdi"
-            value={yeniSifreTekrar}
-            onChange={(e) => setYeniSifreTekrar(e.target.value)}
-            placeholder="Tekrar girin"
-            inputMode="numeric"
-          />
+            <label className="etiket" htmlFor="yeni-sifre">
+              Yeni şifre
+            </label>
+            <input
+              id="yeni-sifre"
+              type="password"
+              className="girdi"
+              value={yeniSifre}
+              onChange={(e) => setYeniSifre(e.target.value)}
+              placeholder="En az 4 karakter"
+              inputMode="numeric"
+            />
 
-          {sifreHata ? <p className="hata">{sifreHata}</p> : null}
-          {sifreMesaj ? <p className="ayar-basari">{sifreMesaj}</p> : null}
+            <label className="etiket" htmlFor="yeni-sifre-tekrar">
+              Yeni şifre tekrar
+            </label>
+            <input
+              id="yeni-sifre-tekrar"
+              type="password"
+              className="girdi"
+              value={yeniSifreTekrar}
+              onChange={(e) => setYeniSifreTekrar(e.target.value)}
+              placeholder="Tekrar girin"
+              inputMode="numeric"
+            />
 
-          <button
-            className="ana"
-            type="button"
-            onClick={() => void sifreyiDegistir()}
-            disabled={kaydediliyor}
-          >
-            {kaydediliyor ? 'Kaydediliyor…' : 'Şifreyi değiştir'}
-          </button>
-        </div>
+            {sifreHata ? <p className="hata">{sifreHata}</p> : null}
+            {sifreMesaj ? <p className="ayar-basari">{sifreMesaj}</p> : null}
+
+            <button
+              className="ana"
+              type="button"
+              onClick={() => void sifreyiDegistir()}
+              disabled={kaydediliyor}
+            >
+              {kaydediliyor ? 'Kaydediliyor…' : 'Şifreyi değiştir'}
+            </button>
+          </div>
+        ) : null}
       </section>
 
       <section className="ayar-bolum ayar-tehlike-bolum">
-        <div className="ayar-bolum-bas">
-          <h2>Oturum</h2>
-          <p>Uygulamayı kilitle</p>
-        </div>
-        <button className="tehlike" type="button" onClick={cikisYap}>
-          Oturumu kapat
+        <button
+          type="button"
+          className="ayar-bolum-bas ayar-bolum-toggle"
+          aria-expanded={acikPanel.oturum}
+          onClick={() => panelAcKapa('oturum')}
+        >
+          <span>
+            <h2>Oturum</h2>
+            <p>Uygulamayı kilitle</p>
+          </span>
+          <span className="ayar-chevron" aria-hidden>
+            {acikPanel.oturum ? '▾' : '›'}
+          </span>
         </button>
+        {acikPanel.oturum ? (
+          <button className="tehlike" type="button" onClick={cikisYap}>
+            Oturumu kapat
+          </button>
+        ) : null}
       </section>
+
+      <section className="ayar-bolum">
+        <div className="ayar-bolum-bas">
+          <h2>Egzersizler</h2>
+          <p>
+            Toplam {toplamEgzersiz} · filtrede {liste.length} · basılı tut: detay
+          </p>
+        </div>
+
+        <div className="bolge-filtre" role="tablist" aria-label="Bölge">
+          {BOLGE_FILTRELER.map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              role="tab"
+              aria-selected={bolgeFiltre === b.id}
+              className={bolgeFiltre === b.id ? 'bolge-chip secili' : 'bolge-chip'}
+              onClick={() => setBolgeFiltre(b.id)}
+            >
+              {b.ad}
+            </button>
+          ))}
+        </div>
+
+        <button className="ana-ayar yeni-egz-btn" type="button" onClick={() => setYeniAcik(true)}>
+          + Yeni egzersiz
+        </button>
+
+        {(bolgeFiltre === 'core' || bolgeFiltre === 'hepsi') && (
+          <>
+            <label className="etiket" htmlFor="core-hasta">
+              Core hasta ata
+            </label>
+            <select
+              id="core-hasta"
+              className="girdi"
+              value={hastaId}
+              onChange={(e) => setHastaId(e.target.value)}
+            >
+              <option value="">Seçin…</option>
+              {hastalar.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.ad}
+                  {h.atananCoreIds?.length ? ` (${h.atananCoreIds.length})` : ''}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+
+        <div className="core-liste" key={katalogSurum}>
+          {liste.map((egz) => {
+            const secili = egz.tur === 'core' && seciliCore.includes(egz.id)
+            return (
+              <button
+                key={egz.id}
+                type="button"
+                className={[
+                  'core-satir',
+                  secili ? 'secili' : '',
+                  egz.manuel ? 'manuel' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onPointerDown={() => basildi(egz.id)}
+                onPointerUp={() => birakildi(egz.id, egz.tur)}
+                onPointerLeave={iptalBasili}
+                onPointerCancel={iptalBasili}
+                onContextMenu={(e) => e.preventDefault()}
+              >
+                {egz.tur === 'core' ? (
+                  <span className="core-check" aria-hidden>
+                    {secili ? '✓' : ''}
+                  </span>
+                ) : (
+                  <span className="core-check bolge-isaret" aria-hidden>
+                    ·
+                  </span>
+                )}
+                <span className="core-satir-metin">
+                  <strong>{egz.ad}</strong>
+                  <em>
+                    {egz.tur === 'core' ? 'core' : bolgeEtiket(egz.bolge)}
+                    {egz.manuel ? ' · manuel' : ''} · {egz.doz}
+                  </em>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+
+        {(bolgeFiltre === 'core' || bolgeFiltre === 'hepsi') && (
+          <>
+            <button className="ana" type="button" onClick={() => void coreAta()} disabled={!hastaId}>
+              Core ata ({seciliCore.length})
+            </button>
+            {coreMesaj ? <p className="ayar-basari">{coreMesaj}</p> : null}
+          </>
+        )}
+      </section>
+
+      {yeniAcik ? (
+        <div className="core-detay-maske" role="dialog" onClick={() => setYeniAcik(false)}>
+          <div
+            className="core-detay-frame"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className="core-detay-ust">
+              <strong>Yeni egzersiz</strong>
+              <button type="button" className="ana-ayar" onClick={() => setYeniAcik(false)}>
+                Kapat
+              </button>
+            </div>
+
+            <label className="etiket" htmlFor="yeni-tur">
+              Tür
+            </label>
+            <select
+              id="yeni-tur"
+              className="girdi"
+              value={yeniTur}
+              onChange={(e) => setYeniTur(e.target.value as EgzTur)}
+            >
+              <option value="tedavi">Tedavi</option>
+              <option value="core">Core</option>
+            </select>
+
+            <label className="etiket" htmlFor="yeni-ad">
+              Ad
+            </label>
+            <input
+              id="yeni-ad"
+              className="girdi"
+              value={yeniAd}
+              onChange={(e) => setYeniAd(e.target.value)}
+              placeholder="Egzersiz adı"
+            />
+
+            {yeniTur === 'tedavi' ? (
+              <>
+                <label className="etiket" htmlFor="yeni-bolge">
+                  Bölge
+                </label>
+                <select
+                  id="yeni-bolge"
+                  className="girdi"
+                  value={yeniBolge}
+                  onChange={(e) => setYeniBolge(e.target.value)}
+                >
+                  {BOLGE_FILTRELER.filter((b) => b.id !== 'hepsi' && b.id !== 'core').map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.ad}
+                    </option>
+                  ))}
+                </select>
+              </>
+            ) : null}
+
+            <label className="etiket" htmlFor="yeni-ihtiyac">
+              İhtiyaç
+            </label>
+            <select
+              id="yeni-ihtiyac"
+              className="girdi"
+              value={yeniIhtiyac}
+              onChange={(e) => setYeniIhtiyac(e.target.value as Ihtiyac)}
+            >
+              {IHTIYAC_SECENEKLERI.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.ad}
+                </option>
+              ))}
+            </select>
+
+            <label className="etiket" htmlFor="yeni-hedef">
+              Hedef
+            </label>
+            <input
+              id="yeni-hedef"
+              className="girdi"
+              value={yeniHedef}
+              onChange={(e) => setYeniHedef(e.target.value)}
+              placeholder="Kısa hedef"
+            />
+
+            <label className="etiket" htmlFor="yeni-pozisyon">
+              Pozisyon
+            </label>
+            <input
+              id="yeni-pozisyon"
+              className="girdi"
+              value={yeniPozisyon}
+              onChange={(e) => setYeniPozisyon(e.target.value)}
+              placeholder="Örn. oturarak"
+            />
+
+            <label className="etiket" htmlFor="yeni-doz">
+              Doz
+            </label>
+            <input
+              id="yeni-doz"
+              className="girdi"
+              value={yeniDoz}
+              onChange={(e) => setYeniDoz(e.target.value)}
+            />
+
+            <label className="etiket" htmlFor="yeni-adimlar">
+              Adımlar (satır satır)
+            </label>
+            <textarea
+              id="yeni-adimlar"
+              className="girdi"
+              rows={3}
+              value={yeniAdimlar}
+              onChange={(e) => setYeniAdimlar(e.target.value)}
+              placeholder={'1. adım\n2. adım'}
+            />
+
+            <label className="etiket" htmlFor="yeni-onlem">
+              Önlem
+            </label>
+            <input
+              id="yeni-onlem"
+              className="girdi"
+              value={yeniOnlem}
+              onChange={(e) => setYeniOnlem(e.target.value)}
+            />
+
+            <button className="ana" type="button" onClick={yeniKaydet} disabled={!yeniAd.trim()}>
+              Kaydet
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {detayId ? (
+        <div
+          className="core-detay-maske"
+          role="dialog"
+          onClick={() => {
+            setDetayId(undefined)
+            setAdDuzenle(false)
+          }}
+        >
+          <div
+            className={
+              katalogBul(detayId)?.manuel ? 'core-detay-frame manuel' : 'core-detay-frame'
+            }
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            {(() => {
+              const egz: KatalogEgzersiz | undefined = katalogBul(detayId)
+              if (!egz) return null
+              return (
+                <>
+                  <div className="core-detay-ust">
+                    {adDuzenle ? (
+                      <input
+                        className="girdi core-ad-girdi"
+                        value={adTaslak}
+                        autoFocus
+                        aria-label="Egzersiz adı"
+                        onChange={(e) => setAdTaslak(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') adKaydet()
+                          if (e.key === 'Escape') setAdDuzenle(false)
+                        }}
+                        onBlur={adKaydet}
+                      />
+                    ) : (
+                      <strong>{egz.ad}</strong>
+                    )}
+                    <div className="core-detay-aksiyon">
+                      <button
+                        type="button"
+                        className="core-ikon-btn"
+                        aria-label="Adı düzenle"
+                        onClick={() => (adDuzenle ? adKaydet() : adDuzenlemeyiAc(egz.ad))}
+                      >
+                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+                          <path
+                            fill="currentColor"
+                            d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm14.71-9.04a1 1 0 0 0 0-1.41l-2.51-2.51a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.99-1.66z"
+                          />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="ana-ayar"
+                        onClick={() => {
+                          setDetayId(undefined)
+                          setAdDuzenle(false)
+                        }}
+                      >
+                        Kapat
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mini">
+                    {egz.tur === 'core' ? 'Core' : bolgeEtiket(egz.bolge)} · {egz.pozisyon} · {egz.doz}
+                  </p>
+                  {egz.adimlar.map((adim) => (
+                    <p key={adim}>· {adim}</p>
+                  ))}
+                  <p className="mini">{egz.onlem}</p>
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
 
-function useSyncHastalar(): Hasta[] {
-  const [hastalar, setHastalar] = useState(hastalariGetir)
+function useFirebaseHastalar(): { hastalar: Hasta[]; yukleniyor: boolean; hata: string } {
+  const [hastalar, setHastalar] = useState<Hasta[]>([])
+  const [yukleniyor, setYukleniyor] = useState(true)
+  const [hata, setHata] = useState('')
   useEffect(() => {
     let iptal = false
-    void hastalariSenkronizeEt().then((liste) => {
-      if (!iptal) setHastalar(liste)
-    })
+    setYukleniyor(true)
+    void hastalariYukle()
+      .then((liste) => {
+        if (!iptal) {
+          setHastalar(liste)
+          setHata('')
+        }
+      })
+      .catch(() => {
+        if (!iptal) {
+          setHastalar([])
+          setHata('Firebase’den okunamadı.')
+        }
+      })
+      .finally(() => {
+        if (!iptal) setYukleniyor(false)
+      })
     return () => {
       iptal = true
     }
   }, [])
-  return hastalar
+  return { hastalar, yukleniyor, hata }
 }
 
 function Ust({ baslik, geri }: { baslik: string; geri: () => void }) {
@@ -657,5 +1258,7 @@ function hastaOzeti(hasta: Hasta): string {
   const sonuc = secenekBul(hasta.skalaId, hasta.sonucId)?.etiket
   const yas =
     hasta.yas === 'cocuk' ? 'Çocuk' : hasta.yas === 'yetiskin' ? 'Yetişkin' : undefined
-  return [ad, yas, sonuc].filter(Boolean).join(' · ')
+  const bulguSayisi = bulgulariCikar(hasta.hastalikId, hasta.cevaplar).length
+  const bulgu = bulguSayisi > 0 ? `${bulguSayisi} bulgu` : undefined
+  return [ad, yas, sonuc, bulgu].filter(Boolean).join(' · ')
 }

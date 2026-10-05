@@ -9,6 +9,24 @@ export type Kaynak = {
   lisans: string
 }
 
+export type Ihtiyac =
+  | 'germe'
+  | 'kuvvet'
+  | 'motor'
+  | 'denge'
+  | 'yurume'
+  | 'nefes'
+  | 'cilt'
+  | 'transfer'
+  | 'agri'
+
+export type EgzersizEtiketi = {
+  bolge: string
+  ihtiyac: Ihtiyac
+  /** Spastisite / skor eşikleri (sayısal ölçeklerde) */
+  esik?: { min?: number; max?: number }
+}
+
 export type Egzersiz = {
   id: string
   ad: string
@@ -18,6 +36,9 @@ export type Egzersiz = {
   doz: string
   onlem: string
   kaynak: Kaynak
+  etiketler: EgzersizEtiketi[]
+  /** Seansa alınırken önerilen dakika */
+  onerilenDk?: number
 }
 
 export const SEANS_SURESI = 30
@@ -40,7 +61,6 @@ export type Kova = {
   hastalikId: HastalikId
   yas?: YasGrubu
   egzersizler: Egzersiz[]
-  kombinasyonlar: Kombinasyon[]
 }
 
 export type Hasta = {
@@ -50,8 +70,11 @@ export type Hasta = {
   yas?: YasGrubu
   skalaId: string
   sonucId: string
+  /** Eski kayıt uyumu; artık motor üretir, sabit set yok */
   kombinasyonId: string
   cevaplar: Record<string, string>
+  /** Ayarlardan seçilip hastaya atanan core egzersiz id’leri */
+  atananCoreIds?: string[]
   guncellendi?: number
 }
 

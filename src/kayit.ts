@@ -2,106 +2,78 @@ import { collection, deleteDoc, doc, getDocs, setDoc } from 'firebase/firestore'
 import type { Hasta } from './data/tipler'
 import { firebaseBaslat } from './firebase'
 
-const ANAHTAR = 'noro.hastalar.v2'
+const YEREL_ANAHTAR = 'noro.hastalar.v2'
 const KOLEKSIYON = 'hastalar'
 
+/** Oturum içi bellek — kalıcı depolama yok, kaynak yalnızca Firebase */
+let bellek: Hasta[] = []
+
+/** Eski cihaz kopyasını sil (cihazlar arası karışıklığı önler) */
+function yerelTemizle(): void {
+  try {
+    localStorage.removeItem(YEREL_ANAHTAR)
+  } catch {
+    // yok say
+  }
+}
+
 export function hastalariGetir(): Hasta[] {
-  const ham = localStorage.getItem(ANAHTAR)
-  if (!ham) return []
-  const okunan: unknown = JSON.parse(ham)
-  if (!Array.isArray(okunan)) return []
-  return okunan.filter(hastaMi).sort(yenidenEskiye)
-}
-
-function yerelKaydet(liste: Hasta[]): void {
-  localStorage.setItem(ANAHTAR, JSON.stringify(liste.sort(yenidenEskiye)))
-}
-
-export async function hastaKaydet(hasta: Hasta): Promise<void> {
-  const kayit: Hasta = { ...hasta, guncellendi: Date.now() }
-  const liste = hastalariGetir()
-  const index = liste.findIndex((item) => item.id === kayit.id)
-  if (index >= 0) liste[index] = kayit
-  else liste.unshift(kayit)
-  yerelKaydet(liste)
-
-  const { db } = firebaseBaslat()
-  if (!db) return
-  try {
-    await setDoc(doc(db, KOLEKSIYON, kayit.id), temizHasta(kayit))
-  } catch (err) {
-    console.warn('Hasta buluta yazılamadı (yerelde duruyor):', err)
-  }
-}
-
-export async function hastaSil(id: string): Promise<void> {
-  yerelKaydet(hastalariGetir().filter((kayit) => kayit.id !== id))
-
-  const { db } = firebaseBaslat()
-  if (!db) return
-  try {
-    await deleteDoc(doc(db, KOLEKSIYON, id))
-  } catch (err) {
-    console.warn('Hasta buluttan silinemedi:', err)
-  }
+  return [...bellek].sort(yenidenEskiye)
 }
 
 export function hastaGetir(id: string): Hasta | undefined {
-  return hastalariGetir().find((kayit) => kayit.id === id)
+  return bellek.find((kayit) => kayit.id === id)
 }
 
 export function yeniId(): string {
   return `h-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
-/** Yerel ve Firestore listesini birleştirir; eksik olanları karşı tarafa yazar. */
-export async function hastalariSenkronizeEt(): Promise<Hasta[]> {
-  const yerel = hastalariGetir()
+/** Firebase’den yükle; yerel hasta verisi kullanılmaz / silinir */
+export async function hastalariYukle(): Promise<Hasta[]> {
+  yerelTemizle()
   const { db } = firebaseBaslat()
-  if (!db) return yerel
-
-  try {
-    const snapshot = await getDocs(collection(db, KOLEKSIYON))
-    const bulutHarita = new Map<string, Hasta>()
-    snapshot.forEach((dokuman) => {
-      const veri = { id: dokuman.id, ...dokuman.data() }
-      if (hastaMi(veri)) bulutHarita.set(veri.id, veri)
-    })
-
-    const birlesik = new Map<string, Hasta>()
-    for (const kayit of yerel) birlesik.set(kayit.id, kayit)
-    for (const [id, bulut] of bulutHarita) {
-      const yerelKayit = birlesik.get(id)
-      if (!yerelKayit) {
-        birlesik.set(id, bulut)
-        continue
-      }
-      const yerelZaman = yerelKayit.guncellendi ?? 0
-      const bulutZaman = bulut.guncellendi ?? 0
-      birlesik.set(id, bulutZaman >= yerelZaman ? bulut : yerelKayit)
-    }
-
-    const sonuc = [...birlesik.values()].sort(yenidenEskiye)
-    yerelKaydet(sonuc)
-
-    const yazmalar: Promise<void>[] = []
-    for (const kayit of sonuc) {
-      const bulut = bulutHarita.get(kayit.id)
-      const yerelZaman = kayit.guncellendi ?? 0
-      const bulutZaman = bulut?.guncellendi ?? 0
-      if (!bulut || yerelZaman > bulutZaman) {
-        yazmalar.push(setDoc(doc(db, KOLEKSIYON, kayit.id), temizHasta(kayit)))
-      }
-    }
-    if (yazmalar.length > 0) {
-      await Promise.allSettled(yazmalar)
-    }
-
-    return sonuc
-  } catch (err) {
-    console.warn('Hasta senkronu başarısız, yerel liste kullanılıyor:', err)
-    return yerel
+  if (!db) {
+    bellek = []
+    throw new Error('Firebase bağlı değil')
   }
+
+  const snapshot = await getDocs(collection(db, KOLEKSIYON))
+  const liste: Hasta[] = []
+  snapshot.forEach((dokuman) => {
+    const veri = { id: dokuman.id, ...dokuman.data() }
+    if (hastaMi(veri)) liste.push(veri)
+  })
+  bellek = liste.sort(yenidenEskiye)
+  return hastalariGetir()
+}
+
+/** Geriye uyum: yalnızca Firebase’den okur, yerel ile birleştirmez */
+export async function hastalariSenkronizeEt(): Promise<Hasta[]> {
+  return hastalariYukle()
+}
+
+export async function hastaKaydet(hasta: Hasta): Promise<void> {
+  const kayit = temizHasta({ ...hasta, guncellendi: Date.now() })
+  const { db } = firebaseBaslat()
+  if (!db) throw new Error('Firebase bağlı değil; kayıt yapılamadı')
+
+  await setDoc(doc(db, KOLEKSIYON, kayit.id), kayit)
+
+  const index = bellek.findIndex((item) => item.id === kayit.id)
+  if (index >= 0) bellek[index] = kayit
+  else bellek.unshift(kayit)
+  bellek = bellek.sort(yenidenEskiye)
+  yerelTemizle()
+}
+
+export async function hastaSil(id: string): Promise<void> {
+  const { db } = firebaseBaslat()
+  if (!db) throw new Error('Firebase bağlı değil; silinemedi')
+
+  await deleteDoc(doc(db, KOLEKSIYON, id))
+  bellek = bellek.filter((kayit) => kayit.id !== id)
+  yerelTemizle()
 }
 
 function temizHasta(hasta: Hasta): Hasta {
@@ -116,6 +88,7 @@ function temizHasta(hasta: Hasta): Hasta {
     guncellendi: hasta.guncellendi ?? Date.now(),
   }
   if (hasta.yas) temiz.yas = hasta.yas
+  if (hasta.atananCoreIds?.length) temiz.atananCoreIds = [...hasta.atananCoreIds]
   return temiz
 }
 
@@ -136,3 +109,6 @@ function hastaMi(kayit: unknown): kayit is Hasta {
     typeof ham.cevaplar === 'object'
   )
 }
+
+// Uygulama açılışında eski yerel kopyayı hemen sil
+yerelTemizle()

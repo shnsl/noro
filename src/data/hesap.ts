@@ -1,5 +1,4 @@
-import { aisEksikler, aisHesapla } from './ais'
-import type { Cevaplar } from './ais'
+import { maddeEksikSayisi } from './degerlendirme'
 import { skalaBul } from './skalalar'
 import type { HastalikId } from './tipler'
 
@@ -10,136 +9,113 @@ export type Hesap = {
   eksik: number
 }
 
-const KOL = [
-  { id: 'kol-yok', evre: 1 },
-  { id: 'kol-spast', evre: 2 },
-  { id: 'kol-sinerji', evre: 3 },
-  { id: 'kol-sirt', evre: 4 },
-  { id: 'kol-onde', evre: 4 },
-  { id: 'kol-yana', evre: 5 },
-  { id: 'kol-izole', evre: 6 },
-]
-
-const BACAK = [
-  { id: 'bacak-yok', evre: 1 },
-  { id: 'bacak-spast', evre: 2 },
-  { id: 'bacak-sinerji', evre: 3 },
-  { id: 'bacak-diz', evre: 4 },
-  { id: 'bacak-ayak', evre: 4 },
-  { id: 'bacak-izole', evre: 5 },
-  { id: 'bacak-normal', evre: 6 },
-]
+export type Cevaplar = Record<string, string>
 
 export function hesapla(hastalikId: HastalikId, cevap: Cevaplar): Hesap | null {
-  if (hastalikId === 'parapleji') return hesapAis(cevap)
-  if (hastalikId === 'hemipleji') return hesapEvre('hemipleji', brunnstromEvre(cevap))
-  if (hastalikId === 'parkinson') return hesapEvre('parkinson', hoehnEvre(cevap))
-  if (hastalikId === 'dmd') return hesapEvre('dmd', vignosEvre(cevap))
-  return hesapEvre('serebral-palsi', gmfcsEvre(cevap))
+  const eksik = maddeEksikSayisi(hastalikId, cevap)
+  if (hastalikId === 'parapleji') return ozet('parapleji', paraplejiOzet(cevap), eksik)
+  if (hastalikId === 'hemipleji') return ozet('hemipleji', hemiplejiOzet(cevap), eksik)
+  if (hastalikId === 'parkinson') return ozet('parkinson', parkinsonOzet(cevap), eksik)
+  if (hastalikId === 'dmd') return ozet('dmd', dmdOzet(cevap), eksik)
+  return ozet('serebral-palsi', cpOzet(cevap), eksik)
 }
 
-function hesapAis(cevap: Cevaplar): Hesap | null {
-  const eksik = aisEksikler(cevap).length
-  const sonuc = aisHesapla(cevap)
-  if (!sonuc) return { sonucId: '', etiket: '', gerekce: '', eksik }
-  const etiket = skalaBul('parapleji')?.secenekler.find((secenek) => secenek.id === sonuc.sonucId)?.etiket ?? sonuc.sonucId
-  return { sonucId: sonuc.sonucId, etiket, gerekce: sonuc.gerekce, eksik: 0 }
-}
-
-function hesapEvre(hastalikId: HastalikId, bulunan: { sonucId: string; gerekce: string; eksik: number } | null): Hesap | null {
-  if (!bulunan) return null
-  if (bulunan.eksik > 0) return { sonucId: '', etiket: '', gerekce: '', eksik: bulunan.eksik }
+function ozet(
+  hastalikId: HastalikId,
+  bulunan: { sonucId: string; gerekce: string } | null,
+  eksik: number,
+): Hesap {
+  if (eksik > 0) return { sonucId: '', etiket: '', gerekce: '', eksik }
+  if (!bulunan) return { sonucId: '', etiket: '', gerekce: '', eksik: 1 }
   const skala = skalaBul(hastalikId)
-  const etiket = skala?.secenekler.find((secenek) => secenek.id === bulunan.sonucId)?.etiket ?? bulunan.sonucId
+  const etiket = skala?.secenekler.find((s) => s.id === bulunan.sonucId)?.etiket ?? bulunan.sonucId
   return { sonucId: bulunan.sonucId, etiket, gerekce: bulunan.gerekce, eksik: 0 }
 }
 
-function evreFrom(maddeler: { id: string; evre: number }[], cevap: Cevaplar): { evre: number; eksik: number } {
-  const eksik = maddeler.filter((madde) => !cevap[madde.id]).length
-  const evet = maddeler.filter((madde) => cevap[madde.id] === 'evet')
-  const evre = evet.length === 0 ? 1 : Math.max(...evet.map((madde) => madde.evre))
-  return { evre, eksik }
+function num(cevap: Cevaplar, id: string): number {
+  const n = Number(cevap[id])
+  return Number.isFinite(n) ? n : 0
 }
 
-function brunnstromEvre(cevap: Cevaplar): { sonucId: string; gerekce: string; eksik: number } {
-  const kol = evreFrom(KOL, cevap)
-  const bacak = evreFrom(BACAK, cevap)
-  const eksik = kol.eksik + bacak.eksik
-  const evre = Math.min(kol.evre, bacak.evre)
+function hemiplejiOzet(c: Cevaplar): { sonucId: string; gerekce: string } {
+  const kuvvetler = [
+    num(c, 'hem-omuz-kuvvet'),
+    num(c, 'hem-dirsek-kuvvet'),
+    num(c, 'hem-bilek-kuvvet'),
+    num(c, 'hem-el-kuvvet'),
+    num(c, 'hem-kalca-kuvvet'),
+    num(c, 'hem-diz-kuvvet'),
+    num(c, 'hem-ayak-kuvvet'),
+  ]
+  const spast = [
+    num(c, 'hem-omuz-spast'),
+    num(c, 'hem-dirsek-spast'),
+    num(c, 'hem-bilek-spast'),
+    num(c, 'hem-el-spast'),
+    num(c, 'hem-kalca-spast'),
+    num(c, 'hem-diz-spast'),
+    num(c, 'hem-ayak-spast'),
+  ]
+  const ortK = kuvvetler.reduce((a, b) => a + b, 0) / kuvvetler.length
+  const maxS = Math.max(...spast)
+  const elKullanim = c['hem-el-kullanim'] === 'evet'
+  const yurur = c['hem-yurur'] === 'evet'
+
+  let evre = 1
+  if (ortK < 0.5 && maxS < 1) evre = 1
+  else if (ortK < 1.5 || (maxS >= 1 && ortK < 2)) evre = 2
+  else if (ortK < 2.5) evre = 3
+  else if (ortK < 3.5) evre = 4
+  else if (ortK < 4.2 || !elKullanim) evre = 5
+  else evre = 6
+
+  if (yurur && evre < 4) {
+    // yürüyüş varsa en az orta evre ipucu
+  }
+
   return {
     sonucId: `b${evre}`,
-    gerekce: `Kol evre ${kol.evre}, bacak evre ${bacak.evre}. Tedavi daha kısıtlı tarafa göre yazıldı.`,
-    eksik,
+    gerekce: `Evre ${evre} (kuvvet ${ortK.toFixed(1)}, spast ${maxS})`,
   }
 }
 
-function hoehnEvre(cevap: Cevaplar): { sonucId: string; gerekce: string; eksik: number } | null {
-  const alanlar = ['tek', 'iki', 'denge', 'yurur', 'yatak']
-  const eksik = alanlar.filter((alan) => !cevap[alan]).length
-  if (eksik > 0) return { sonucId: '', gerekce: '', eksik }
-  if (cevap.yatak === 'evet') return { sonucId: 'hy5', gerekce: 'Gün sandalye veya yatakta geçiyor.', eksik: 0 }
-  if (cevap.yurur === 'hayir') return { sonucId: 'hy4', gerekce: 'Yardımsız ayakta durup yürüyemiyor.', eksik: 0 }
-  if (cevap.denge === 'evet') return { sonucId: 'hy3', gerekce: 'Çekme testinde denge bozuluyor, kişi hâlâ yürüyor.', eksik: 0 }
-  if (cevap.iki === 'evet') return { sonucId: 'hy2', gerekce: 'Bulgular iki taraflı, denge bozukluğu yok.', eksik: 0 }
-  if (cevap.tek === 'evet') return { sonucId: 'hy1', gerekce: 'Bulgular tek taraflı.', eksik: 0 }
-  return { sonucId: '', gerekce: 'Bulgunun tek mi iki taraflı mı olduğunu işaretleyin.', eksik: 1 }
+function paraplejiOzet(c: Cevaplar): { sonucId: string; gerekce: string } {
+  const ais = c['par-ais'] || 'ais-c'
+  return {
+    sonucId: ais,
+    gerekce: ais.toUpperCase(),
+  }
 }
 
-function vignosEvre(cevap: Cevaplar): { sonucId: string; gerekce: string; eksik: number } | null {
-  const alanlar = ['yurur', 'merdiven', 'kalkar', 'cihazla', 'dik', 'gecis', 'yatak']
-  const eksik = alanlar.filter((alan) => !cevap[alan]).length
-  if (eksik > 0) return { sonucId: '', gerekce: '', eksik }
+function parkinsonOzet(c: Cevaplar): { sonucId: string; gerekce: string } {
+  if (c['pk-yatak'] === 'evet') return { sonucId: 'hy5', gerekce: 'HY 5' }
+  if (c['pk-yurur'] === 'hayir') return { sonucId: 'hy4', gerekce: 'HY 4' }
+  if (c['pk-denge-bozuk'] === 'evet') return { sonucId: 'hy3', gerekce: 'HY 3' }
+  if (c['pk-ust-rijid'] && Number(c['pk-ust-rijid']) >= 2) {
+    return { sonucId: 'hy2', gerekce: 'HY 2' }
+  }
+  return { sonucId: 'hy1', gerekce: 'HY 1' }
+}
+
+function dmdOzet(c: Cevaplar): { sonucId: string; gerekce: string } {
   let derece = 9
-  if (cevap.yatak === 'evet') derece = 10
-  else if (cevap.yurur === 'evet' && cevap.merdiven === 'yardimsiz') derece = 1
-  else if (cevap.yurur === 'evet' && cevap.merdiven === 'trabzan') derece = 2
-  else if (cevap.yurur === 'evet' && cevap.merdiven === 'yavas') derece = 3
-  else if (cevap.yurur === 'evet' && cevap.merdiven === 'yok' && cevap.kalkar === 'evet') derece = 4
-  else if (cevap.yurur === 'evet' && cevap.merdiven === 'yok') derece = 5
-  else if (cevap.cihazla === 'evet') derece = 6
-  else if (cevap.dik === 'evet' && cevap.gecis === 'evet') derece = 7
-  else if (cevap.dik === 'evet') derece = 8
-  return { sonucId: `v${derece}`, gerekce: `Vignos ${derece}. Yürüme ve transfer cevaplarından hesaplandı.`, eksik: 0 }
+  if (c['dmd-yatak'] === 'evet') derece = 10
+  else if (c['dmd-yurur'] === 'evet' && c['dmd-merdiven'] === 'yardimsiz') derece = 1
+  else if (c['dmd-yurur'] === 'evet' && c['dmd-merdiven'] === 'trabzan') derece = 2
+  else if (c['dmd-yurur'] === 'evet' && c['dmd-merdiven'] === 'yavas') derece = 3
+  else if (c['dmd-yurur'] === 'evet' && c['dmd-merdiven'] === 'yok' && c['dmd-kalkar'] === 'evet') derece = 4
+  else if (c['dmd-yurur'] === 'evet' && c['dmd-merdiven'] === 'yok') derece = 5
+  else if (c['dmd-cihazla'] === 'evet') derece = 6
+  else if (c['dmd-dik'] === 'evet' && c['dmd-gecis'] === 'evet') derece = 7
+  else if (c['dmd-dik'] === 'evet') derece = 8
+  return { sonucId: `v${derece}`, gerekce: `Vignos ${derece}` }
 }
 
-function gmfcsEvre(cevap: Cevaplar): { sonucId: string; gerekce: string; eksik: number } | null {
-  const alanlar = ['cp-yurur', 'cp-sinir', 'cp-cihaz', 'cp-teker', 'cp-kendi', 'cp-tasima']
-  const eksik = alanlar.filter((alan) => !cevap[alan]).length
-  if (eksik > 0) return { sonucId: '', gerekce: '', eksik }
-  if (cevap['cp-tasima'] === 'evet') {
-    return { sonucId: 'g5', gerekce: 'Baş ve gövde sınırlı, yer değiştirme için taşınıyor. GMFCS V.', eksik: 0 }
-  }
-  if (cevap['cp-cihaz'] === 'evet') {
-    return { sonucId: 'g3', gerekce: 'Yürümek için elde tutulan cihaz kullanıyor. GMFCS III.', eksik: 0 }
-  }
-  if (cevap['cp-teker'] === 'evet' && cevap['cp-kendi'] === 'evet') {
-    return { sonucId: 'g4', gerekce: 'Yer değiştirmenin çoğu sandalyede ve sandalyeyi kendisi sürüyor. GMFCS IV.', eksik: 0 }
-  }
-  if (cevap['cp-teker'] === 'evet' || cevap['cp-yurur'] === 'hayir') {
-    return { sonucId: 'g5', gerekce: 'Bağımsız yürüme yok. GMFCS V.', eksik: 0 }
-  }
-  if (cevap['cp-sinir'] === 'evet') {
-    return { sonucId: 'g2', gerekce: 'Cihazsız yürüyor, mesafe veya zeminde kısıt var. GMFCS II.', eksik: 0 }
-  }
-  return { sonucId: 'g1', gerekce: 'Cihazsız ve kısıtlanmadan yürüyor. GMFCS I.', eksik: 0 }
+function cpOzet(c: Cevaplar): { sonucId: string; gerekce: string } {
+  if (c['cp-tasima'] === 'evet') return { sonucId: 'g5', gerekce: 'GMFCS V' }
+  if (c['cp-cihaz'] === 'evet') return { sonucId: 'g3', gerekce: 'GMFCS III' }
+  if (c['cp-teker'] === 'evet' && c['cp-kendi'] === 'evet') return { sonucId: 'g4', gerekce: 'GMFCS IV' }
+  if (c['cp-teker'] === 'evet' || c['cp-yurur'] === 'hayir') return { sonucId: 'g5', gerekce: 'GMFCS V' }
+  if (c['cp-sinir'] === 'evet') return { sonucId: 'g2', gerekce: 'GMFCS II' }
+  return { sonucId: 'g1', gerekce: 'GMFCS I' }
 }
-
-export const KOL_MADDELERI = [
-  { id: 'kol-yok', metin: 'İstemli kol hareketi yok' },
-  { id: 'kol-spast', metin: 'Spastisite var, istemli hareket çok az' },
-  { id: 'kol-sinerji', metin: 'Omuz, dirsek ve el birlikte, sinergi içinde hareket ediyor' },
-  { id: 'kol-sirt', metin: 'Elini bele veya sırta götürüyor' },
-  { id: 'kol-onde', metin: 'Kol önde 90° iken dirseği açıyor' },
-  { id: 'kol-yana', metin: 'Kol yana 90°, dirsek düz, önkol dönebiliyor' },
-  { id: 'kol-izole', metin: 'Eklemleri ayrı ayrı, normale yakın hızda oynatıyor' },
-]
-
-export const BACAK_MADDELERI = [
-  { id: 'bacak-yok', metin: 'İstemli bacak hareketi yok' },
-  { id: 'bacak-spast', metin: 'Spastisite var, istemli hareket çok az' },
-  { id: 'bacak-sinerji', metin: 'Kalça, diz ve ayak bileği birlikte bükülüyor' },
-  { id: 'bacak-diz', metin: 'Otururken dizini 90° üzerine büküyor' },
-  { id: 'bacak-ayak', metin: 'Topuk yerdeyken ayağını yukarı çekiyor' },
-  { id: 'bacak-izole', metin: 'Kalça düzken dizini ayrı büküyor' },
-  { id: 'bacak-normal', metin: 'Eklemleri ayrı ayrı, normale yakın' },
-]
