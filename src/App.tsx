@@ -4,7 +4,7 @@ import type { Cevaplar } from './data/hesap'
 import { SEANS_SURESI } from './data/tipler'
 import { hesapla } from './data/hesap'
 import { skalaBul, secenekBul } from './data/skalalar'
-import { atananCoreListesi, coreKatalog, ekOnerileriSec } from './data/ekOneriler'
+import { atananCoreListesi, ekOnerileriSec } from './data/ekOneriler'
 import {
   BOLGE_FILTRELER,
   IHTIYAC_SECENEKLERI,
