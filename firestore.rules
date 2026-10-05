@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: ayarlar
+    // Document: guvenlik
+    // Fields:
+    //   - sifre: string (required, 4-64 chars)
+    //   - olusturuldu: string (optional ISO date)
+    //   - guncellendi: string (optional ISO date)
+    //
+    // Collection: hastalar
+    // Document ID: hasta.id
+    // Fields:
+    //   - id: string
+    //   - ad: string
+    //   - hastalikId: string
+    //   - yas: string (optional: cocuk|yetiskin)
+    //   - skalaId: string
+    //   - sonucId: string
+    //   - kombinasyonId: string
+    //   - cevaplar: map<string, string>
+    //   - guncellendi: number (optional millis)
+    //
+    // Auth model: PIN-only clinic app without Firebase Auth.
+    // Prototype rules allow unauthenticated access ONLY to these paths,
+    // with field validation. Review before sharing the app widely.
+    // ===============================================================
+
+    function isString(value) {
+      return value is string;
+    }
+
+    function isValidGuvenlik() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['sifre', 'olusturuldu', 'guncellendi'])
+        && isString(data.sifre)
+        && data.sifre.size() >= 4
+        && data.sifre.size() <= 64
+        && (!('olusturuldu' in data) || isString(data.olusturuldu))
+        && (!('guncellendi' in data) || isString(data.guncellendi));
+    }
+
+    function isValidHasta(documentId) {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+          'id', 'ad', 'hastalikId', 'yas', 'skalaId',
+          'sonucId', 'kombinasyonId', 'cevaplar', 'guncellendi'
+        ])
+        && isString(data.id)
+        && data.id == documentId
+        && isString(data.ad)
+        && data.ad.size() > 0
+        && data.ad.size() <= 120
+        && isString(data.hastalikId)
+        && isString(data.skalaId)
+        && isString(data.sonucId)
+        && isString(data.kombinasyonId)
+        && data.cevaplar is map
+        && (!('yas' in data) || data.yas in ['cocuk', 'yetiskin'])
+        && (!('guncellendi' in data) || data.guncellendi is number);
+    }
+
+    match /ayarlar/guvenlik {
+      allow read: if true;
+      allow create, update: if isValidGuvenlik();
+      allow delete: if false;
+    }
+
+    match /hastalar/{document} {
+      allow read: if true;
+      allow create, update: if isValidHasta(document);
+      allow delete: if true;
+    }
+  }
+}
